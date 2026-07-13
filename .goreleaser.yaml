@@ -1,0 +1,80 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: sparktop
+    main: ./cmd/sparktop
+    binary: sparktop
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/galaxy-io/sparktop/internal/cli.version={{.Version}}
+      - -X github.com/galaxy-io/sparktop/internal/cli.commit={{.Commit}}
+      - -X github.com/galaxy-io/sparktop/internal/cli.buildDate={{.Date}}
+
+archives:
+  - id: sparktop
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+
+nfpms:
+  - id: sparktop
+    package_name: sparktop
+    formats:
+      - deb
+    maintainer: Leon Kozlowski <leonkozlowski@gmail.com>
+    homepage: https://github.com/galaxy-io/sparktop
+    description: A DGX Spark TUI that takes the heat.
+    license: MIT
+    contents:
+      - src: config.yaml.example
+        dst: /etc/sparktop/config.yaml.example
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+
+release:
+  github:
+    owner: galaxy-io
+    name: sparktop
+  draft: false
+  prerelease: auto
+
+brews:
+  - name: sparktop
+    repository:
+      owner: galaxy-io
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/galaxy-io/sparktop"
+    description: "A DGX Spark TUI that takes the heat."
+    license: "MIT"
+    install: |
+      bin.install "sparktop"
+    test: |
+      system "#{bin}/sparktop", "version"

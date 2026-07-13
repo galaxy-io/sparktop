@@ -1,0 +1,27 @@
+# sparktop config — copy to config.yaml and edit, or skip the file and use
+#   sparktop -nodes spark-01=192.168.1.101,spark-02=192.168.1.102
+
+# how often to poll each node. 1s is fine over a LAN/Tailscale — the scrapes are
+# tiny. Caveat: dcgm-exporter has its own internal collect interval (coarse by
+# default), so set DCGM_EXPORTER_INTERVAL=1000 on the node for GPU metrics to
+# actually refresh every second.
+interval: 1s
+
+# per-scrape budget. Decoupled from interval so a slow exporter doesn't fail
+# just because it's slower than the UI tick. Default: max(5s, 4×interval),
+# clamped to 30s. Bump this if you see "context deadline exceeded".
+# timeout: 10s
+
+# how many points each sparkline keeps
+history: 60
+
+# your DGX Spark nodes. `host` is enough when the exporters run on the default
+# ports (node_exporter :9100, dcgm-exporter :9400); override per node otherwise.
+nodes:
+  - name: spark-01
+    host: 192.168.1.101
+  - name: spark-02
+    host: 192.168.1.102
+    # node_port: 9100
+    # gpu_port: 9400
+    # vllm_port: 8000   # scrape vLLM /metrics for tokens/sec, queue depth, KV-cache

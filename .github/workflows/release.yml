@@ -23,6 +23,15 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Mint Token
+        id: releaser
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GX_NULL_APP_ID }}
+          private-key: ${{ secrets.GX_NULL_PRIVATE_KEY }}
+          owner: galaxy-io
+          repositories: homebrew-tap
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
@@ -31,4 +40,4 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP_TOKEN: ${{ steps.releaser.outputs.token }}

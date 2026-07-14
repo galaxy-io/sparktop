@@ -40,7 +40,7 @@ nfpms:
       - deb
     maintainer: Leon Kozlowski <leonkozlowski@gmail.com>
     homepage: https://github.com/galaxy-io/sparktop
-    description: A DGX Spark TUI that takes the heat.
+    description: TUI Dashboard for DGX Spark
     license: MIT
     contents:
       - src: config.yaml.example

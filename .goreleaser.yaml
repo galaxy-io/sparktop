@@ -71,6 +71,9 @@ brews:
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     directory: Formula
+    commit_author:
+      name: gx-null[bot]
+      email: 286761379+gx-null[bot]@users.noreply.github.com
     homepage: "https://github.com/galaxy-io/sparktop"
     description: "A DGX Spark TUI that takes the heat."
     license: "MIT"

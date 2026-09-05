@@ -64,25 +64,20 @@ release:
   draft: false
   prerelease: auto
 
-homebrew_casks:
+brews:
   - name: sparktop
-    ids:
-      - sparktop
-    binaries:
-      - sparktop
     repository:
       owner: galaxy-io
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    directory: Casks
+    directory: Formula
     commit_author:
       name: gx-null[bot]
       email: 286761379+gx-null[bot]@users.noreply.github.com
     homepage: "https://github.com/galaxy-io/sparktop"
     description: "DGX Spark TUI that takes the heat"
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/sparktop"]
-          end
+    license: "MIT"
+    install: |
+      bin.install "sparktop"
+    test: |
+      system "#{bin}/sparktop", "version"

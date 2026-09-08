@@ -215,7 +215,7 @@ Prometheus stack for a two-node cluster.
 | `internal/ui/` | the `dado` dashboard |
 | `internal/exporters/docker-compose.yml` | `node_exporter` + `dcgm-exporter` stack - embedded in the binary |
 | `Taskfile.yml` | `task build`, `task test`, … (needs [Task](https://taskfile.dev)) |
-| `.goreleaser.yaml` | release builds, the `.deb`, and the Homebrew tap formula |
+| `.goreleaser.yaml` | release builds, the `.deb`, and the Homebrew tap cask |
 
 ## Notes
 

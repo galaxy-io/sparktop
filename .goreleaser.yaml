@@ -61,6 +61,7 @@ release:
   github:
     owner: galaxy-io
     name: sparktop
+  target_commitish: "{{ .Commit }}"
   draft: false
   prerelease: auto
 

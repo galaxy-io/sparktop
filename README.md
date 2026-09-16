@@ -32,7 +32,8 @@ toolkit). Inspired by [paul-aviles/NVIDIA-DGX-Spark-Dashboard](https://github.co
 - Memory is shown once, unified: on GB10, "VRAM" and system RAM are the same physical LPDDR5X pool
 
 ### vLLM serving
-- Served model, **running/waiting** request counts (waiting turns yellow: backpressure), **KV-cache %**, and live **generation tok/s** as a solid block-area chart
+- Served model, **running/waiting** request counts (waiting turns yellow: backpressure), **KV-cache %**, and live **generation tok/s** in one cluster-wide block-area chart
+- Distributed clusters are recognized: worker nodes are labeled separately and point to the server supplying cluster-wide metrics instead of showing a false connection error
 - A latency detail line derived from vLLM's histograms, averaged over each poll window:
   - **TTFT** - time-to-first-token, what a user feels before streaming starts
   - **ITL** - inter-token latency, the streaming smoothness
@@ -148,7 +149,7 @@ Each flag overrides the config file:
 | `-nodes name=host,…` | Comma-separated node list |
 | `-interval 2s` | Poll cadence |
 | `-theme <name>` | Theme name |
-| `-vllm-port 8000` | Scrape vLLM `/metrics` on this port for every node (use per-node `vllm_port:` in the config for mixed setups) |
+| `-vllm-port 8000` | Scrape vLLM `/metrics` on this port; active distributed workers are detected automatically |
 
 ## Configuration
 
@@ -171,11 +172,20 @@ nodes:
   - name: spark-01
     host: 192.168.1.101
     vllm_port: 8000       # scrape vLLM /metrics: tok/s, queue depth, KV-cache, latency
+    vllm_role: server     # optional; prevents this endpoint being mistaken for a worker
   - name: spark-02
     host: 192.168.1.102
+    vllm_role: worker     # distributed worker; it does not expose /metrics itself
     # node_port: 9100     # override if the exporters aren't on the defaults
     # gpu_port: 9400
 ```
+
+`vllm_role` accepts `auto` (the default), `server`, or `worker`. In auto mode,
+sparktop recognizes a busy worker when exactly one monitored vLLM endpoint is
+healthy and either the peer refuses the same port or the server has active
+requests. Set the roles explicitly for stable labeling before the first
+request, or when a firewall hides the distinction between a worker and a
+failed server.
 
 ## CLI
 

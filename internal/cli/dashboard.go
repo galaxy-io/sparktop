@@ -21,7 +21,7 @@ func Dashboard(args []string) int {
 	nodesFlag := fs.String("nodes", "", "comma-separated name=host pairs (overrides config nodes), e.g. spark-01=10.0.0.1,spark-02=10.0.0.2")
 	intervalFlag := fs.Duration("interval", 0, "poll interval (overrides config)")
 	themeNameFlag := fs.String("theme", "", "theme name (overrides config file)")
-	vllmPortFlag := fs.Int("vllm-port", 0, "scrape vLLM /metrics on this port for every node (e.g. 8000); 0 disables")
+	vllmPortFlag := fs.Int("vllm-port", 0, "scrape vLLM /metrics on this port (distributed workers are auto-detected); 0 disables")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}

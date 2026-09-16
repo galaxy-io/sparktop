@@ -20,8 +20,10 @@ history: 60
 nodes:
   - name: spark-01
     host: 192.168.1.101
+    # vllm_port: 8000   # the distributed cluster's API/metrics server
+    # vllm_role: server
   - name: spark-02
     host: 192.168.1.102
     # node_port: 9100
     # gpu_port: 9400
-    # vllm_port: 8000   # scrape vLLM /metrics for tokens/sec, queue depth, KV-cache
+    # vllm_role: worker # cluster worker; metrics come from the server node

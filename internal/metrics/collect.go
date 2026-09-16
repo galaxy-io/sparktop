@@ -38,6 +38,10 @@ type nodeState struct {
 	prevITLSum    float64
 	prevITLCount  float64
 	prevPreempt   float64
+
+	// Sticky after positive detection so a worker does not disappear during a
+	// momentary idle GPU sample.
+	inferWorkerDetected bool
 }
 
 // Collector scrapes a fixed set of nodes.
@@ -72,6 +76,7 @@ func (c *Collector) Collect(ctx context.Context) []Snapshot {
 		}(i)
 	}
 	wg.Wait()
+	c.reconcileInference(out)
 	return out
 }
 
@@ -120,7 +125,10 @@ func (c *Collector) collectOne(ctx context.Context, st *nodeState) Snapshot {
 		s.GPUs = parseGPUs(gf)
 	}
 
-	if url := st.cfg.VLLMURL(); url != "" {
+	if st.cfg.NormalizedVLLMRole() == config.VLLMRoleWorker {
+		s.InferOn = true
+		s.InferWorker = true
+	} else if url := st.cfg.VLLMURL(); url != "" {
 		s.InferOn = true
 		if vf, err := c.scrape(ctx, url); err != nil {
 			s.InferErr = err.Error()
@@ -130,6 +138,74 @@ func (c *Collector) collectOne(ctx context.Context, st *nodeState) Snapshot {
 		}
 	}
 	return s
+}
+
+const inferWorkerBusyPct = 5.0
+
+// reconcileInference recognizes the common distributed-vLLM layout where the
+// API server alone exposes /metrics and its GPU workers have no HTTP listener.
+// Automatic classification is deliberately conservative: there must be one
+// healthy server and observable GPU work on its peer. The peer either refuses
+// the same configured port, or is unconfigured while the server has active
+// requests. An explicit vllm_role: worker remains classified while idle.
+func (c *Collector) reconcileInference(snaps []Snapshot) {
+	server := -1
+	servers := 0
+	for i := range snaps {
+		if snaps[i].InferUp {
+			c.states[i].inferWorkerDetected = false
+			server = i
+			servers++
+		}
+	}
+
+	if servers == 1 {
+		for i := range snaps {
+			if i == server || !snaps[i].InferWorker {
+				continue
+			}
+			attachInferPeer(&snaps[i], snaps[server])
+		}
+	}
+	if servers != 1 {
+		return
+	}
+
+	for i := range snaps {
+		if i == server || snaps[i].InferWorker || snaps[i].InferUp {
+			continue
+		}
+		if c.states[i].cfg.NormalizedVLLMRole() != config.VLLMRoleAuto {
+			continue
+		}
+
+		refusedEndpoint := snaps[i].InferOn && strings.Contains(strings.ToLower(snaps[i].InferErr), "connection refused")
+		unconfiguredPeer := !snaps[i].InferOn && snaps[server].ReqRunning > 0
+		if !c.states[i].inferWorkerDetected && !refusedEndpoint && !unconfiguredPeer {
+			continue
+		}
+		if !c.states[i].inferWorkerDetected && !hasBusyGPU(snaps[i].GPUs) {
+			continue
+		}
+		c.states[i].inferWorkerDetected = true
+		snaps[i].InferOn = true
+		snaps[i].InferWorker = true
+		attachInferPeer(&snaps[i], snaps[server])
+	}
+}
+
+func attachInferPeer(worker *Snapshot, server Snapshot) {
+	worker.InferPeer = server.Name
+	worker.InferModel = server.InferModel
+}
+
+func hasBusyGPU(gpus []GPU) bool {
+	for _, gpu := range gpus {
+		if gpu.UtilPct >= inferWorkerBusyPct {
+			return true
+		}
+	}
+	return false
 }
 
 // fillInfer reads vLLM's Prometheus metrics. The token counters are turned into

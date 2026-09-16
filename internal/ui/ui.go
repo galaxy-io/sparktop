@@ -65,9 +65,10 @@ type nodeWidgets struct {
 	cardPower  *components.MetricCard
 	cardMem    *components.MetricCard
 	gpuLine    *core.TextView // per-GPU detail (clock is the throttle tell)
-	inferLine  *core.TextView // vLLM serving stats (hidden when no vllm_port)
-	inferStats *core.TextView // vLLM latency detail: TTFT, ITL, prefill, preemptions
-	tok        *Spark         // generation throughput as a block-bar area
+	inferPanel *components.Panel
+	inferBox   *core.Flex
+	inferLine  *core.TextView // model or endpoint state
+	inferStats *core.TextView // compact labeled metric row
 	cores      *CoreGrid      // per-core CPU heatmap (core × time)
 	coresCap   *core.TextView // host stats caption above the map
 	coresBox   *core.Flex     // cores with its caption
@@ -82,17 +83,14 @@ type nodeWidgets struct {
 
 	// dynamic body heights; dado's Flex has no ResizeItem, so the body is
 	// re-assembled whenever one of these changes.
-	gpuRows    int
-	inferRows  int
-	infer2Rows int
-	tokProp    int
+	gpuRows   int
+	inferRows int
 
 	// full-width rolling histories behind the sparklines and graphs
 	histUtil  *ring
 	histTemp  *ring
 	histPower *ring
 	histMem   *ring
-	histTok   *ring
 	histRx    *ring
 	histTx    *ring
 	histRd    *ring
@@ -109,13 +107,19 @@ type nodeWidgets struct {
 
 // UI owns the dado application and the per-node widgets.
 type UI struct {
-	app       *layout.App
-	cfg       *config.Config
-	top       *core.TextView
-	nodes     []*nodeWidgets
-	hist      int
-	themeName string
-	onForce   func()
+	app               *layout.App
+	cfg               *config.Config
+	top               *core.TextView
+	nodes             []*nodeWidgets
+	cluster           *core.Flex
+	content           *core.Flex
+	clusterTok        *Spark
+	clusterTokPanel   *components.Panel
+	clusterTokHist    *ring
+	clusterTokVisible bool
+	hist              int
+	themeName         string
+	onForce           func()
 }
 
 // New builds the dashboard for the given nodes (it does not start it).
@@ -130,8 +134,17 @@ func New(cfg *config.Config, nodes []config.Node) *UI {
 		u.nodes = append(u.nodes, w)
 		cluster.AddItem(w.panel, 0, 1, false)
 	}
+	u.cluster = cluster
+	u.clusterTok = NewSpark().SetColorFunc(flatColor(theme.Success))
+	u.clusterTokHist = newRing(max(cfg.HistoryLen(), 256))
+	u.clusterTokPanel = components.NewPanel().
+		SetTitle(" vLLM THROUGHPUT ").
+		SetTitleAlign(components.TitleAlignLeft)
+	u.clusterTokPanel.SetContent(u.clusterTok)
+	u.content = core.NewFlex().SetDirection(core.Column).
+		AddItem(cluster, 0, 1, false)
 
-	root := components.NewComponentBase(cluster).
+	root := components.NewComponentBase(u.content).
 		SetName("cluster").
 		SetHints([]components.KeyHint{
 			{Key: "r", Description: "refresh now"},
@@ -184,7 +197,6 @@ func newNodeWidgets(title string, hist int) *nodeWidgets {
 		gpuLine:    core.NewTextView().SetDynamicColors(true),
 		inferLine:  core.NewTextView().SetDynamicColors(true),
 		inferStats: core.NewTextView().SetDynamicColors(true),
-		tok:        NewSpark().SetLabel("tok/s").SetColorFunc(flatColor(theme.Success)),
 		cores:      NewCoreGrid(),
 		coresCap:   core.NewTextView().SetDynamicColors(true),
 		netCap:     core.NewTextView().SetDynamicColors(true),
@@ -194,14 +206,11 @@ func newNodeWidgets(title string, hist int) *nodeWidgets {
 		diskRd:     NewSpark().SetColorFunc(flatColor(theme.Accent)),
 		diskWr:     NewSpark().SetColorFunc(flatColor(theme.Success)),
 		gpuRows:    1,
-		inferRows:  1,
-		infer2Rows: 1,
-		tokProp:    3,
+		inferRows:  4,
 		histUtil:   newRing(hist),
 		histTemp:   newRing(hist),
 		histPower:  newRing(hist),
 		histMem:    newRing(hist),
-		histTok:    newRing(hist),
 		histRx:     newRing(hist),
 		histTx:     newRing(hist),
 		histRd:     newRing(hist),
@@ -219,6 +228,13 @@ func newNodeWidgets(title string, hist int) *nodeWidgets {
 	w.cards = core.NewFlex().SetDirection(core.Column).
 		AddItem(cardsTop, 0, 1, false).
 		AddItem(cardsBot, 0, 1, false)
+	w.inferBox = core.NewFlex().SetDirection(core.Column).
+		AddItem(w.inferLine, 1, 0, false).
+		AddItem(w.inferStats, 1, 0, false)
+	w.inferPanel = components.NewPanel().
+		SetTitle(" vLLM ").
+		SetTitleAlign(components.TitleAlignLeft).
+		SetContent(w.inferBox)
 
 	w.coresCap.SetText("[gray]cores")
 	w.coresBox = core.NewFlex().SetDirection(core.Column).
@@ -249,21 +265,18 @@ func (w *nodeWidgets) layoutBody() {
 	w.body.AddItem(w.health, 1, 0, false)
 	w.body.AddItem(w.cards, 12, 0, false)
 	w.body.AddItem(w.gpuLine, w.gpuRows, 0, false)
-	w.body.AddItem(w.inferLine, w.inferRows, 0, false)
-	w.body.AddItem(w.inferStats, w.infer2Rows, 0, false)
-	w.body.AddItem(w.tok, 0, w.tokProp, false)
+	w.body.AddItem(w.inferPanel, w.inferRows, 0, false)
 	w.body.AddItem(w.coresBox, 0, 2, false)
 	w.body.AddItem(w.netBox, 0, 2, false)
 	w.body.AddItem(w.diskBox, 0, 2, false)
 }
 
 // setRows adjusts the dynamic body heights, rebuilding the layout on change.
-func (w *nodeWidgets) setRows(gpuRows, inferRows, infer2Rows, tokProp int) {
-	if gpuRows == w.gpuRows && inferRows == w.inferRows &&
-		infer2Rows == w.infer2Rows && tokProp == w.tokProp {
+func (w *nodeWidgets) setRows(gpuRows, inferRows int) {
+	if gpuRows == w.gpuRows && inferRows == w.inferRows {
 		return
 	}
-	w.gpuRows, w.inferRows, w.infer2Rows, w.tokProp = gpuRows, inferRows, infer2Rows, tokProp
+	w.gpuRows, w.inferRows = gpuRows, inferRows
 	w.layoutBody()
 }
 
@@ -311,12 +324,26 @@ func (u *UI) cycleTheme() {
 
 func (u *UI) render(snaps []metrics.Snapshot) {
 	upNodes, upGPUs := 0, 0
+	inferServers, inferWorkers := 0, 0
+	var genTok, promptTok, running, waiting float64
+	inferOn := false
 	var clusterPower, maxTemp float64
 	for _, s := range snaps {
 		if s.Up {
 			upNodes++
 		}
 		upGPUs += s.UpGPUs()
+		if s.InferUp {
+			inferServers++
+			genTok += s.GenTokPerSec
+			promptTok += s.PromptTokPerSec
+			running += s.ReqRunning
+			waiting += s.ReqWaiting
+		}
+		inferOn = inferOn || s.InferOn
+		if s.InferWorker {
+			inferWorkers++
+		}
 		for _, g := range s.GPUs {
 			clusterPower += g.PowerW
 			if g.TempC > maxTemp {
@@ -324,9 +351,13 @@ func (u *UI) render(snaps []metrics.Snapshot) {
 			}
 		}
 	}
+	inferSummary := ""
+	if inferWorkers > 0 {
+		inferSummary = fmt.Sprintf("  •  vLLM %d server + %d worker", inferServers, inferWorkers)
+	}
 	u.top.SetText(fmt.Sprintf(
-		" [::b]sparktop[::-]  •  %d/%d nodes  •  %d GPU(s)  •  %.0f W  •  %s peak  •  %s  •  every %s",
-		upNodes, len(snaps), upGPUs, clusterPower, tempTag(maxTemp),
+		" [::b]sparktop[::-]  •  %d/%d nodes  •  %d GPU(s)%s  •  %.0f W  •  %s peak  •  %s  •  every %s",
+		upNodes, len(snaps), upGPUs, inferSummary, clusterPower, tempTag(maxTemp),
 		time.Now().Format("15:04:05"), u.cfg.PollEvery()))
 
 	for i := range u.nodes {
@@ -335,6 +366,39 @@ func (u *UI) render(snaps []metrics.Snapshot) {
 		}
 		u.renderNode(u.nodes[i], snaps[i])
 	}
+	u.renderClusterThroughput(inferOn, inferWorkers > 0, inferServers, genTok, promptTok, running, waiting)
+}
+
+// renderClusterThroughput owns the single inference graph shared by all node
+// columns. vLLM's server metrics describe the distributed engine as a whole,
+// so drawing the graph inside one node panel is misleading and misaligns the
+// per-node host metrics.
+func (u *UI) renderClusterThroughput(on, clustered bool, servers int, genTok, promptTok, running, waiting float64) {
+	if on != u.clusterTokVisible {
+		u.clusterTokVisible = on
+		u.content.Clear()
+		u.content.AddItem(u.cluster, 0, 1, false)
+		if on {
+			u.content.AddItem(u.clusterTokPanel, 9, 0, false)
+		}
+	}
+	if !on {
+		return
+	}
+
+	title := " vLLM THROUGHPUT "
+	if clustered {
+		title = " vLLM CLUSTER THROUGHPUT "
+	}
+	u.clusterTokPanel.SetTitle(title)
+	if servers == 0 {
+		u.clusterTok.SetLabel("METRICS UNAVAILABLE").SetCurrent("GENERATION", "— tok/s")
+		u.clusterTok.SetValues(u.clusterTokHist.push(0))
+		return
+	}
+	u.clusterTok.SetLabel(fmt.Sprintf("RUNNING  %.0f     WAITING  %.0f     PREFILL  %s tok/s", running, waiting, humanCount(promptTok)))
+	u.clusterTok.SetCurrent("GENERATION", humanCount(genTok)+" tok/s")
+	u.clusterTok.SetValues(u.clusterTokHist.push(genTok))
 }
 
 func (u *UI) renderNode(w *nodeWidgets, s metrics.Snapshot) {
@@ -425,11 +489,6 @@ func (w *nodeWidgets) feedDisk(rd, wr float64) {
 		tag(theme.Accent()), humanBytes(rd), tag(theme.Success()), humanBytes(wr)))
 }
 
-// feedTok pushes a fresh generation-rate sample.
-func (w *nodeWidgets) feedTok(v float64) {
-	w.tok.SetValues(w.histTok.push(v))
-}
-
 // flatColor paints every bar of a rate chart in one theme color, resolved at
 // draw time so theme switches recolor it.
 func flatColor(c func() tcell.Color) func(float64, float64) tcell.Color {
@@ -450,7 +509,7 @@ func tag(c tcell.Color) string {
 func (w *nodeWidgets) renderGPULine(s metrics.Snapshot) {
 	if len(s.GPUs) == 0 {
 		w.gpuLine.SetText("[gray]no GPUs reported")
-		w.setRows(1, w.inferRows, w.infer2Rows, w.tokProp)
+		w.setRows(1, w.inferRows)
 		return
 	}
 	// No framebuffer figure: on GB10's unified memory dcgm reports 0 MiB of
@@ -466,24 +525,42 @@ func (w *nodeWidgets) renderGPULine(s metrics.Snapshot) {
 			tempTag(g.TempC), g.SMClockMHz, g.PowerW)
 	}
 	w.gpuLine.SetText(b.String())
-	w.setRows(len(s.GPUs), w.inferRows, w.infer2Rows, w.tokProp)
+	w.setRows(len(s.GPUs), w.inferRows)
 }
 
-// renderInfer shows vLLM serving health and toggles the workload widgets. When
-// no vllm_port is configured the line and tok/s graph collapse to zero height.
+// renderInfer shows per-node vLLM role and serving health. Throughput lives in
+// one cluster-wide pane so every node's host metrics stay vertically aligned.
 func (w *nodeWidgets) renderInfer(s metrics.Snapshot) {
 	if !s.InferOn {
-		w.setRows(w.gpuRows, 0, 0, 0)
+		w.setRows(w.gpuRows, 0)
+		return
+	}
+
+	if s.InferWorker {
+		w.setRows(w.gpuRows, 4)
+		w.inferPanel.SetTitle(" vLLM · WORKER ").SetTitleColor(theme.Accent())
+		model := s.InferModel
+		if model == "" {
+			model = "vLLM"
+		}
+		w.inferLine.SetText(fmt.Sprintf("[white::b]%s[-:-]", shortModel(model)))
+		if s.InferPeer == "" {
+			w.inferStats.SetText("[yellow::b]WAITING[-:-]  [gray]for metrics server")
+		} else {
+			w.inferStats.SetText(fmt.Sprintf("[green::b]READY[-:-]  [gray](via %s)", s.InferPeer))
+		}
 		return
 	}
 
 	if !s.InferUp {
-		w.setRows(w.gpuRows, 1, 0, 3)
-		w.inferLine.SetText("[yellow]vLLM: " + firstLine(s.InferErr))
-		w.feedTok(0) // keep the timeline sliding so the outage reads as a dip
+		w.setRows(w.gpuRows, 4)
+		w.inferPanel.SetTitle(" vLLM · UNAVAILABLE ").SetTitleColor(theme.Warning())
+		w.inferLine.SetText("[yellow]" + firstLine(s.InferErr))
+		w.inferStats.SetText("[gray]shared throughput metrics are waiting")
 		return
 	}
-	w.setRows(w.gpuRows, 1, 1, 3)
+	w.setRows(w.gpuRows, 4)
+	w.inferPanel.SetTitle(" vLLM · CLUSTER HEAD ").SetTitleColor(theme.Success())
 
 	model := s.InferModel
 	if model == "" {
@@ -493,24 +570,22 @@ func (w *nodeWidgets) renderInfer(s metrics.Snapshot) {
 	if s.ReqWaiting > 0 {
 		waitTag = "[yellow]" // queue building = backpressure
 	}
-	w.inferLine.SetText(fmt.Sprintf(
-		"[white]%s[-]  [green]%.0f run[-] · %s%.0f wait[-] · KV %s%.0f%%[-] · [::b]%s tok/s",
-		shortModel(model), s.ReqRunning, waitTag, s.ReqWaiting,
-		colorTag(s.KVCachePct, 80, 95), s.KVCachePct, humanCount(s.GenTokPerSec)))
+	w.inferLine.SetText(fmt.Sprintf("[white::b]%s[-:-]", shortModel(model)))
 
 	// Latency detail: TTFT is what a user feels before streaming starts, ITL is
 	// the streaming smoothness, prefill throughput shows ingest load, and any
 	// preemption means the KV cache is thrashing.
-	pre := fmt.Sprintf("[gray]%.0f preempt[-]", s.Preemptions)
+	pre := fmt.Sprintf("[gray]%.0f[-]", s.Preemptions)
 	if s.Preemptions > 0 {
-		pre = fmt.Sprintf("[yellow]%.0f preempt[-]", s.Preemptions)
+		pre = fmt.Sprintf("[yellow]%.0f[-]", s.Preemptions)
 	}
 	w.inferStats.SetText(fmt.Sprintf(
-		"[gray]ttft[-] %s [gray]· itl[-] %s [gray]· prefill[-] %s [gray]tok/s ·[-] %s",
+		"[gray]RUN[-] [green]%3.0f[-]   [gray]WAIT[-] %s%3.0f[-]   [gray]KV[-] %s%3.0f%%[-]   [gray]TTFT[-] %s   [gray]ITL[-] %s   [gray]PREEMPT[-] %s",
+		s.ReqRunning, waitTag, s.ReqWaiting,
+		colorTag(s.KVCachePct, 80, 95), s.KVCachePct,
 		latencyVal(s.TTFTMs, 1000, 3000),
 		latencyVal(s.ITLMs, 25, 60),
-		humanCount(s.PromptTokPerSec), pre))
-	w.feedTok(s.GenTokPerSec)
+		pre))
 }
 
 // markDown blanks a node's widgets and shows why it's unreachable.
@@ -524,9 +599,8 @@ func (w *nodeWidgets) markDown(s metrics.Snapshot) {
 	w.gpuLine.SetText("")
 	w.inferLine.SetText("")
 	w.inferStats.SetText("")
-	// Keep the timelines sliding at zero so the outage shows as a dip in the
-	// history rather than wiping it.
-	w.feedTok(0)
+	// Keep host timelines sliding at zero so the outage shows as a dip rather
+	// than wiping their history.
 	w.feedNet(0, 0)
 	w.feedDisk(0, 0)
 	w.coresCap.SetText("[gray]cores")

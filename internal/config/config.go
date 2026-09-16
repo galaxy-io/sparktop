@@ -19,7 +19,14 @@ type Node struct {
 	NodePort int    `yaml:"node_port"` // node_exporter port (default 9100)
 	GPUPort  int    `yaml:"gpu_port"`  // dcgm-exporter port (default 9400)
 	VLLMPort int    `yaml:"vllm_port"` // vLLM /metrics port (e.g. 8000); 0 disables workload scraping
+	VLLMRole string `yaml:"vllm_role"` // auto (default), server, or worker
 }
+
+const (
+	VLLMRoleAuto   = "auto"
+	VLLMRoleServer = "server"
+	VLLMRoleWorker = "worker"
+)
 
 // Display returns the name to show for this node.
 func (n Node) Display() string {
@@ -41,10 +48,21 @@ func (n Node) GPUURL() string {
 
 // VLLMURL is the vLLM /metrics endpoint, or "" if no vllm_port is configured.
 func (n Node) VLLMURL() string {
-	if n.VLLMPort <= 0 {
+	if n.VLLMPort <= 0 || n.NormalizedVLLMRole() == VLLMRoleWorker {
 		return ""
 	}
 	return fmt.Sprintf("http://%s:%d/metrics", n.Host, n.VLLMPort)
+}
+
+// NormalizedVLLMRole returns the configured inference role. An omitted role is
+// auto so existing configurations keep their current behavior while allowing
+// the collector to recognize distributed workers.
+func (n Node) NormalizedVLLMRole() string {
+	role := strings.ToLower(strings.TrimSpace(n.VLLMRole))
+	if role == "" {
+		return VLLMRoleAuto
+	}
+	return role
 }
 
 func portOr(p, def int) int {
@@ -169,6 +187,11 @@ func Load(path string) (*Config, error) {
 	for i := range c.Nodes {
 		if strings.TrimSpace(c.Nodes[i].Host) == "" {
 			return nil, fmt.Errorf("%s: node %d is missing 'host'", path, i+1)
+		}
+		switch role := c.Nodes[i].NormalizedVLLMRole(); role {
+		case VLLMRoleAuto, VLLMRoleServer, VLLMRoleWorker:
+		default:
+			return nil, fmt.Errorf("%s: node %d has invalid vllm_role %q (want auto, server, or worker)", path, i+1, c.Nodes[i].VLLMRole)
 		}
 	}
 	return c, nil

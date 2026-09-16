@@ -45,9 +45,11 @@ type Snapshot struct {
 
 	// inference workload (from vLLM /metrics); only populated when a node has
 	// vllm_port set.
-	InferOn         bool    // a vLLM endpoint is configured for this node
+	InferOn         bool    // inference monitoring applies to this server or worker
 	InferUp         bool    // vLLM /metrics responded
 	InferErr        string  // vLLM scrape error, if any
+	InferWorker     bool    // node participates as a distributed vLLM worker
+	InferPeer       string  // server node supplying cluster-wide vLLM metrics
 	InferModel      string  // served model name
 	ReqRunning      float64 // requests currently decoding
 	ReqWaiting      float64 // requests queued (backpressure when > 0)

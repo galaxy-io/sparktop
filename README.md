@@ -6,7 +6,6 @@
 
 [![Release](https://img.shields.io/github/v/release/galaxy-io/sparktop)](https://github.com/galaxy-io/sparktop/releases)
 [![License](https://img.shields.io/github/license/galaxy-io/sparktop)](https://github.com/galaxy-io/sparktop/blob/main/LICENSE)
-[![Go Version](https://img.shields.io/github/go-mod/go-version/galaxy-io/sparktop)](go.mod)
 [![Ask DeepWiki](https://img.shields.io/badge/DeepWiki-Ask-7B3FE4)](https://deepwiki.com/galaxy-io/sparktop)
 
 A terminal dashboard for small **NVIDIA DGX Spark** clusters - host, GPU, and
